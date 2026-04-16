@@ -76,6 +76,67 @@ class AgentBrowserAdapterTest(unittest.TestCase):
             {"include_launch_args": True},
         )
 
+    def test_get_count_uses_cli_selector_count_command(self) -> None:
+        adapter = AgentBrowserAdapter(agent_browser_path="agent-browser")
+
+        with mock.patch.object(adapter, "_run_command", return_value={"success": True, "output": "7"}) as mock_run:
+            count = adapter.get_count(".note-item")
+
+        self.assertEqual(count, 7)
+        mock_run.assert_called_once_with("get", "count", ".note-item")
+
+    def test_upload_files_passes_selector_and_all_paths(self) -> None:
+        adapter = AgentBrowserAdapter(agent_browser_path="agent-browser")
+        files = ["/tmp/a.png", "/tmp/b.png"]
+
+        with mock.patch.object(adapter, "_run_command", return_value={"success": True, "output": ""}) as mock_run:
+            uploaded = adapter.upload_files('input[type="file"]', files)
+
+        self.assertTrue(uploaded)
+        mock_run.assert_called_once_with("upload", 'input[type="file"]', *files)
+
+    def test_hover_element_uses_hover_command_with_selector(self) -> None:
+        adapter = AgentBrowserAdapter(agent_browser_path="agent-browser")
+
+        with mock.patch.object(adapter, "_run_command", return_value={"success": True, "output": ""}) as mock_run:
+            hovered = adapter.hover_element(".filter-button")
+
+        self.assertTrue(hovered)
+        mock_run.assert_called_once_with("hover", ".filter-button")
+
+    def test_mouse_click_moves_then_presses_and_releases(self) -> None:
+        adapter = AgentBrowserAdapter(agent_browser_path="agent-browser")
+
+        with mock.patch.object(
+            adapter,
+            "_run_command",
+            side_effect=[
+                {"success": True, "output": ""},
+                {"success": True, "output": ""},
+                {"success": True, "output": ""},
+            ],
+        ) as mock_run:
+            clicked = adapter.mouse_click(12.5, 34.0)
+
+        self.assertTrue(clicked)
+        self.assertEqual(
+            mock_run.call_args_list,
+            [
+                mock.call("mouse", "move", "12.5", "34.0"),
+                mock.call("mouse", "down", "left"),
+                mock.call("mouse", "up", "left"),
+            ],
+        )
+
+    def test_scroll_into_view_uses_scrollintoview_command(self) -> None:
+        adapter = AgentBrowserAdapter(agent_browser_path="agent-browser")
+
+        with mock.patch.object(adapter, "_run_command", return_value={"success": True, "output": ""}) as mock_run:
+            scrolled = adapter.scroll_into_view(".comments-container")
+
+        self.assertTrue(scrolled)
+        mock_run.assert_called_once_with("scrollintoview", ".comments-container")
+
 
 class ChromeLauncherBackendSelectionTest(unittest.TestCase):
     def test_ensure_chrome_uses_agent_browser_backend_when_enabled(self) -> None:

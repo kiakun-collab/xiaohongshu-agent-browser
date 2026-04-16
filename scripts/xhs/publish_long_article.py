@@ -184,7 +184,7 @@ def _fill_long_title(page: Page, title: str) -> None:
     """填写长文标题（textarea，需使用 native setter）。"""
     page.wait_for_element(LONG_ARTICLE_TITLE, timeout=10)
 
-    page.evaluate(
+    updated = page.evaluate(
         f"""
         (() => {{
             const el = document.querySelector({json.dumps(LONG_ARTICLE_TITLE)});
@@ -200,6 +200,8 @@ def _fill_long_title(page: Page, title: str) -> None:
         }})()
         """
     )
+    if updated in (False, None):
+        raise PublishError("未找到长文标题输入框，页面结构可能已变化")
     logger.info("已填写长文标题: %s", title[:20])
     time.sleep(0.5)
 
@@ -219,7 +221,7 @@ def _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:
     """将图片插入到编辑器中。"""
     for img_path in image_paths:
         file_uri = Path(img_path).resolve().as_uri()
-        page.evaluate(
+        inserted = page.evaluate(
             f"""
             (() => {{
                 const editor = document.querySelector({json.dumps(CONTENT_EDITOR)});
@@ -232,6 +234,8 @@ def _insert_images_to_editor(page: Page, image_paths: list[str]) -> None:
             }})()
             """
         )
+        if inserted in (False, None):
+            raise PublishError(f"插入长文图片失败: {img_path}")
     logger.info("已插入 %d 张图片到编辑器", len(image_paths))
     time.sleep(1)
 

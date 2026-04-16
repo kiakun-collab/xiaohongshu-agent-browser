@@ -13,6 +13,7 @@ from .publish import (
     _find_content_element,
     _input_tags,
     _navigate_to_publish_page,
+    _set_file_input_with_fallbacks,
     _set_schedule_publish,
     _set_visibility,
     _wait_for_publish_transition,
@@ -96,9 +97,9 @@ def _upload_video(page: Page, video_path: str) -> None:
     if not os.path.exists(video_path):
         raise PublishError(f"视频文件不存在: {video_path}")
 
-    # 查找上传输入框
-    selector = UPLOAD_INPUT if page.has_element(UPLOAD_INPUT) else FILE_INPUT
-    page.set_file_input(selector, [video_path])
+    preferred_selector = UPLOAD_INPUT if page.has_element(UPLOAD_INPUT) else FILE_INPUT
+    selectors = [preferred_selector, FILE_INPUT if preferred_selector == UPLOAD_INPUT else UPLOAD_INPUT]
+    _set_file_input_with_fallbacks(page, selectors, [video_path])
 
     # 等待发布按钮可点击（视频处理完成）
     _wait_for_publish_button_clickable(page)

@@ -16,6 +16,7 @@ from typing import Any
 
 import requests
 import websockets.sync.client as ws_client
+from chrome_launcher import get_agent_browser_adapter, get_browser_backend
 
 from .errors import CDPError, ElementNotFoundError
 from .stealth import REALISTIC_UA, STEALTH_JS
@@ -26,6 +27,238 @@ logger = logging.getLogger(__name__)
 def _select_all_modifier_value(system_name: str | None = None) -> int:
     """返回当前平台对应的全选修饰键。"""
     return 4 if (system_name or platform.system()) == "Darwin" else 2
+
+
+class AgentBrowserPage:
+    """基于 agent-browser 的最小 Page 兼容层。"""
+
+    def __init__(self, adapter: Any) -> None:
+        self.adapter = adapter
+        self.target_id = "agent-browser"
+        self.session_id = "agent-browser"
+
+    def navigate(self, url: str) -> None:
+        if not self.adapter.open_url(url):
+            raise CDPError(f"导航失败: {url}")
+
+    def wait_for_load(self, timeout: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = self.evaluate("document.readyState")
+                if state == "complete":
+                    return
+            except Exception:
+                pass
+            time.sleep(0.5)
+        logger.warning("等待页面加载超时")
+
+    def wait_dom_stable(self, timeout: float = 10.0, interval: float = 0.5) -> None:
+        last_html = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                html = self.evaluate("document.body ? document.body.innerHTML.length : 0")
+                if html == last_html and html not in (None, ""):
+                    return
+                last_html = html
+            except Exception:
+                pass
+            time.sleep(interval)
+
+    def evaluate(self, expression: str) -> Any:
+        return self.adapter.evaluate(expression)
+
+    def evaluate_function(self, function_body: str, *args: Any) -> Any:
+        encoded_args = ", ".join(json.dumps(arg) for arg in args)
+        return self.evaluate(f"({function_body})({encoded_args})")
+
+    def query_selector(self, selector: str) -> str | None:
+        return selector if self.has_element(selector) else None
+
+    def has_element(self, selector: str) -> bool:
+        return self.evaluate(f"document.querySelector({json.dumps(selector)}) !== null") is True
+
+    def wait_for_element(self, selector: str, timeout: float = 30.0) -> str:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.has_element(selector):
+                return selector
+            time.sleep(0.5)
+        raise ElementNotFoundError(selector)
+
+    def click_element(self, selector: str) -> None:
+        clicked = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                el.scrollIntoView({{block: 'center'}});
+                el.click();
+                return true;
+            }})()
+            """
+        )
+        if clicked is not True:
+            raise ElementNotFoundError(selector)
+
+    def type_text(self, text: str, delay_ms: int = 50) -> None:
+        del delay_ms
+        if not self.adapter.type_text(text):
+            raise CDPError("文本输入失败")
+
+    def input_text(self, selector: str, text: str) -> None:
+        updated = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                el.focus();
+                if ('value' in el) {{
+                    el.value = {json.dumps(text, ensure_ascii=False)};
+                }} else {{
+                    el.textContent = {json.dumps(text, ensure_ascii=False)};
+                }}
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()
+            """
+        )
+        if updated in (False, None):
+            raise ElementNotFoundError(selector)
+
+    def input_content_editable(self, selector: str, text: str) -> None:
+        updated = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                el.focus();
+                el.innerText = {json.dumps(text, ensure_ascii=False)};
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()
+            """
+        )
+        if updated in (False, None):
+            raise ElementNotFoundError(selector)
+
+    def get_element_text(self, selector: str) -> str | None:
+        return self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                return el ? el.textContent : null;
+            }})()
+            """
+        )
+
+    def get_element_attribute(self, selector: str, attr: str) -> str | None:
+        return self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                return el ? el.getAttribute({json.dumps(attr)}) : null;
+            }})()
+            """
+        )
+
+    def get_elements_count(self, selector: str) -> int:
+        return int(self.adapter.get_count(selector) or 0)
+
+    def scroll_by(self, x: int, y: int | None = None) -> None:
+        delta_x = 0 if y is None else x
+        delta_y = x if y is None else y
+        self.evaluate(f"window.scrollBy({delta_x}, {delta_y})")
+
+    def scroll_to(self, x: int, y: int | None = None) -> None:
+        target_x = 0 if y is None else x
+        target_y = x if y is None else y
+        self.evaluate(f"window.scrollTo({target_x}, {target_y})")
+
+    def scroll_to_bottom(self) -> None:
+        self.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+    def scroll_element_into_view(self, selector: str) -> None:
+        if not self.adapter.scroll_into_view(selector):
+            raise ElementNotFoundError(selector)
+
+    def scroll_nth_element_into_view(self, selector: str, index: int) -> None:
+        self.evaluate(
+            f"""
+            (() => {{
+                const els = document.querySelectorAll({json.dumps(selector)});
+                if (!els[{index}]) return false;
+                els[{index}].scrollIntoView({{behavior: 'smooth', block: 'center'}});
+                return true;
+            }})()
+            """
+        )
+
+    def get_scroll_top(self) -> int:
+        result = self.evaluate(
+            "window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0"
+        )
+        return int(result) if result else 0
+
+    def get_viewport_height(self) -> int:
+        result = self.evaluate("window.innerHeight")
+        return int(result) if result else 768
+
+    def set_file_input(self, selector: str, files: list[str]) -> None:
+        if not self.adapter.upload_files(selector, files):
+            raise ElementNotFoundError(selector)
+
+    def dispatch_wheel_event(self, delta_y: float = 0, delta_x: float = 0) -> None:
+        if not self.adapter.mouse_wheel(delta_x, delta_y):
+            raise CDPError("滚轮事件派发失败")
+
+    def mouse_move(self, x: float, y: float) -> None:
+        if not self.adapter.mouse_move(x, y):
+            raise CDPError("鼠标移动失败")
+
+    def mouse_click(self, x: float, y: float, button: str = "left") -> None:
+        clicked = self.adapter.mouse_click(x, y) if button == "left" else self.adapter.mouse_click(x, y, button)
+        if not clicked:
+            raise CDPError("鼠标点击失败")
+
+    def press_key(self, key: str) -> None:
+        if not self.adapter.press_key(key):
+            raise CDPError(f"按键失败: {key}")
+
+    def remove_element(self, selector: str) -> None:
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (el) el.remove();
+            }})()
+            """
+        )
+
+    def hover_element(self, selector: str) -> None:
+        if not self.adapter.hover_element(selector):
+            raise ElementNotFoundError(selector)
+
+    def select_all_text(self, selector: str) -> None:
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                el.focus();
+                el.select ? el.select() : document.execCommand('selectAll');
+                return true;
+            }})()
+            """
+        )
+
+    def capture_screenshot(self, output_path: str) -> str:
+        if not self.adapter.take_screenshot(output_path):
+            raise CDPError("页面截图失败")
+        return output_path
 
 
 class CDPClient:
@@ -536,7 +769,7 @@ class Page:
 
 
 class Browser:
-    """Chrome 浏览器 CDP 控制器。"""
+    """浏览器入口对象。"""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9222) -> None:
         self.host = host
@@ -544,8 +777,17 @@ class Browser:
         self.base_url = f"http://{host}:{port}"
         self._cdp: CDPClient | None = None
 
+    @staticmethod
+    def _use_agent_browser_backend() -> bool:
+        return get_browser_backend() == "agent-browser"
+
     def connect(self) -> None:
-        """连接到 Chrome DevTools。"""
+        if self._use_agent_browser_backend():
+            adapter = get_agent_browser_adapter()
+            if not adapter.ensure_ready():
+                raise CDPError("agent-browser 会话初始化失败")
+            return
+
         resp = requests.get(f"{self.base_url}/json/version", timeout=5)
         resp.raise_for_status()
         info = resp.json()
@@ -555,6 +797,15 @@ class Browser:
 
     def new_page(self, url: str = "about:blank") -> Page:
         """创建新页面。"""
+        if self._use_agent_browser_backend():
+            adapter = get_agent_browser_adapter()
+            if not adapter.ensure_ready():
+                raise CDPError("agent-browser 会话初始化失败")
+            page = AgentBrowserPage(adapter)
+            if url and url != "about:blank":
+                page.navigate(url)
+            return page
+
         if not self._cdp:
             self.connect()
         assert self._cdp is not None
@@ -631,6 +882,13 @@ class Browser:
 
     def get_existing_page(self, target_id: str | None = None) -> Page | None:
         """获取已有页面。"""
+        if self._use_agent_browser_backend():
+            del target_id
+            adapter = get_agent_browser_adapter()
+            if adapter.get_current_url():
+                return AgentBrowserPage(adapter)
+            return None
+
         if target_id:
             return self.attach_to_target(target_id)
 
@@ -642,6 +900,11 @@ class Browser:
     def close_page(self, page: Page) -> None:
         """关闭页面。"""
         import contextlib
+
+        if isinstance(page, AgentBrowserPage):
+            with contextlib.suppress(Exception):
+                page.adapter.close()
+            return
 
         if self._cdp:
             with contextlib.suppress(CDPError):

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 from .cdp import Page
 from .errors import NoFeedsError
+from .eval_json import decode_page_json
 from .types import Feed
 from .urls import HOME_URL
 
@@ -45,5 +45,5 @@ def list_feeds(page: Page) -> list[Feed]:
     if not result:
         raise NoFeedsError()
 
-    feeds_data = json.loads(result)
+    feeds_data = decode_page_json(result)
     return [Feed.from_dict(f) for f in feeds_data]

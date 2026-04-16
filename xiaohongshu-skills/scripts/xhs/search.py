@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 from .cdp import Page
+from .eval_json import decode_page_json
 from .errors import NoFeedsError
 from .human import sleep_random
 from .selectors import FILTER_BUTTON, FILTER_PANEL
@@ -115,7 +115,7 @@ def search_feeds(
     if not result:
         raise NoFeedsError()
 
-    feeds_data = json.loads(result)
+    feeds_data = decode_page_json(result)
     return [Feed.from_dict(f) for f in feeds_data]
 
 

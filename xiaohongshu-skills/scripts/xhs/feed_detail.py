@@ -9,6 +9,7 @@ import re
 import time
 
 from .cdp import Page
+from .eval_json import decode_page_json
 from .errors import NoFeedDetailError, PageNotAccessibleError
 from .human import (
     BUTTON_CLICK_INTERVAL,
@@ -211,7 +212,7 @@ def _extract_feed_detail(page: Page, feed_id: str) -> FeedDetailResponse:
     if not result:
         raise NoFeedDetailError()
 
-    note_detail_map = json.loads(result)
+    note_detail_map = decode_page_json(result)
     note_data = note_detail_map.get(feed_id)
     if not note_data:
         raise NoFeedDetailError()

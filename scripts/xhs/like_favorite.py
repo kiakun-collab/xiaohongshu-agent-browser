@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 from .cdp import Page
+from .eval_json import decode_page_json
 from .errors import NoFeedDetailError
 from .selectors import COLLECT_BUTTON, LIKE_BUTTON
 from .types import ActionResult
@@ -40,7 +40,7 @@ def _get_interact_state(page: Page, feed_id: str) -> tuple[bool, bool]:
     if not result:
         raise NoFeedDetailError()
 
-    note_detail_map = json.loads(result)
+    note_detail_map = decode_page_json(result)
     detail = note_detail_map.get(feed_id)
     if not detail:
         raise NoFeedDetailError()

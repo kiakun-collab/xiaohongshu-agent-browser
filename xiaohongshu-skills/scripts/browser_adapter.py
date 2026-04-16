@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -60,6 +61,12 @@ class AgentBrowserAdapter:
         current_url = result["output"].strip()
         return current_url or None
 
+    def evaluate(self, expression: str) -> Any:
+        result = self._run_command("eval", expression)
+        if not result["success"]:
+            raise RuntimeError(result["error"] or "agent-browser 执行 JS 失败")
+        return self._coerce_output(result["output"])
+
     def get_snapshot(self, interactive_only: bool = True) -> list[SnapshotElement]:
         command: list[str] = ["snapshot"]
         if interactive_only:
@@ -69,12 +76,56 @@ class AgentBrowserAdapter:
             return []
         return self._parse_snapshot(result["output"])
 
-    def click_element(self, ref: str) -> bool:
-        result = self._run_command("click", self._normalize_ref(ref))
+    def click_element(self, target: str) -> bool:
+        result = self._run_command("click", self._normalize_target(target))
         return bool(result["success"])
 
-    def fill_element(self, ref: str, text: str) -> bool:
-        result = self._run_command("fill", self._normalize_ref(ref), text)
+    def fill_element(self, target: str, text: str) -> bool:
+        result = self._run_command("fill", self._normalize_target(target), text)
+        return bool(result["success"])
+
+    def type_text(self, text: str) -> bool:
+        result = self._run_command("keyboard", "type", text)
+        return bool(result["success"])
+
+    def get_count(self, target: str) -> int:
+        result = self._run_command("get", "count", self._normalize_target(target))
+        if not result["success"]:
+            return 0
+        output = str(result["output"]).strip()
+        try:
+            return int(output)
+        except (TypeError, ValueError):
+            return 0
+
+    def upload_files(self, target: str, files: list[str]) -> bool:
+        result = self._run_command("upload", self._normalize_target(target), *files)
+        return bool(result["success"])
+
+    def hover_element(self, target: str) -> bool:
+        result = self._run_command("hover", self._normalize_target(target))
+        return bool(result["success"])
+
+    def scroll_into_view(self, target: str) -> bool:
+        result = self._run_command("scrollintoview", self._normalize_target(target))
+        return bool(result["success"])
+
+    def mouse_move(self, x: float, y: float) -> bool:
+        result = self._run_command("mouse", "move", str(x), str(y))
+        return bool(result["success"])
+
+    def mouse_click(self, x: float, y: float, button: str = "left") -> bool:
+        moved = self.mouse_move(x, y)
+        pressed = self._run_command("mouse", "down", button)
+        released = self._run_command("mouse", "up", button)
+        return moved and bool(pressed["success"]) and bool(released["success"])
+
+    def mouse_wheel(self, delta_x: float, delta_y: float) -> bool:
+        result = self._run_command("mouse", "wheel", str(delta_x), str(delta_y))
+        return bool(result["success"])
+
+    def press_key(self, key: str) -> bool:
+        result = self._run_command("press", key)
         return bool(result["success"])
 
     def take_screenshot(self, path: str) -> bool:
@@ -177,3 +228,22 @@ class AgentBrowserAdapter:
         if normalized.startswith("@"):
             return normalized
         return f"@{normalized}"
+
+    @classmethod
+    def _normalize_target(cls, target: str) -> str:
+        normalized = target.strip()
+        if re.fullmatch(r"@?e\d+", normalized):
+            return cls._normalize_ref(normalized)
+        return normalized
+
+    @staticmethod
+    def _coerce_output(output: str) -> Any:
+        text = output.strip()
+        if not text:
+            return None
+        if text in {"true", "false", "null"}:
+            return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text

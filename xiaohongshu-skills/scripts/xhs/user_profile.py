@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 
 from .cdp import Page
+from .eval_json import decode_page_json
 from .types import Feed, UserBasicInfo, UserInteraction, UserProfileResponse
 from .urls import make_user_profile_url
 
@@ -79,12 +79,12 @@ def _extract_user_profile_data(page: Page) -> UserProfileResponse:
         raise RuntimeError("user.notes.value not found in __INITIAL_STATE__")
 
     # 解析用户信息
-    user_page_data = json.loads(user_data_result)
+    user_page_data = decode_page_json(user_data_result)
     basic_info = UserBasicInfo.from_dict(user_page_data.get("basicInfo", {}))
     interactions = [UserInteraction.from_dict(i) for i in user_page_data.get("interactions", [])]
 
     # 解析帖子（双重数组，展平）
-    notes_feeds_raw = json.loads(notes_result)
+    notes_feeds_raw = decode_page_json(notes_result)
     feeds: list[Feed] = []
     for feed_group in notes_feeds_raw:
         if isinstance(feed_group, list):

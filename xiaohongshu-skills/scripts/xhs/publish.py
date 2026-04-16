@@ -9,7 +9,7 @@ import re
 import time
 
 from .cdp import Page
-from .errors import ContentTooLongError, PublishError, TitleTooLongError, UploadTimeoutError
+from .errors import ContentTooLongError, ElementNotFoundError, PublishError, TitleTooLongError, UploadTimeoutError
 from .selectors import (
     CONTENT_EDITOR,
     CONTENT_LENGTH_ERROR,
@@ -284,6 +284,26 @@ def _remove_pop_cover(page: Page) -> None:
 # ========== 图片上传 ==========
 
 
+def _set_file_input_with_fallbacks(page: Page, selectors: list[str], file_paths: list[str]) -> str:
+    """尝试多个上传入口，兼容拖拽区与隐藏 file input。"""
+    attempted_selectors: list[str] = []
+    last_error: ElementNotFoundError | None = None
+
+    for selector in selectors:
+        if selector in attempted_selectors:
+            continue
+        attempted_selectors.append(selector)
+        try:
+            page.set_file_input(selector, file_paths)
+            return selector
+        except ElementNotFoundError as exc:
+            last_error = exc
+            logger.warning("上传入口不可用，尝试回退到下一个 selector: %s", selector)
+
+    selector_text = ", ".join(attempted_selectors)
+    raise PublishError(f"文件上传失败，尝试的 selector: {selector_text}") from last_error
+
+
 def _upload_images(page: Page, image_paths: list[str]) -> None:
     """逐张上传图片。"""
     import os
@@ -293,10 +313,10 @@ def _upload_images(page: Page, image_paths: list[str]) -> None:
         raise PublishError("没有有效的图片文件")
 
     for i, path in enumerate(valid_paths):
-        selector = UPLOAD_INPUT if i == 0 else FILE_INPUT
+        selectors = [UPLOAD_INPUT, FILE_INPUT] if i == 0 else [FILE_INPUT, UPLOAD_INPUT]
         logger.info("上传第 %d 张图片: %s", i + 1, path)
 
-        page.set_file_input(selector, [path])
+        _set_file_input_with_fallbacks(page, selectors, [path])
         _wait_for_upload_complete(page, i + 1)
         time.sleep(1)
 
