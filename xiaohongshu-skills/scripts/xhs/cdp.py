@@ -650,6 +650,140 @@ class AgentBrowserPage:
         if not self._adapter.press_key(key):
             raise CDPError(f"按键失败: {key}")
 
+    def evaluate(self, expression: str) -> Any:
+        """执行 JavaScript 表达式并返回结果。"""
+        return self._adapter.evaluate(expression)
+
+    def wait_dom_stable(self, timeout: float = 10.0, interval: float = 0.5) -> None:
+        """等待 DOM 稳定（连续两次 DOM 快照一致）。"""
+        last_html = ""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                html = self.evaluate("document.body ? document.body.innerHTML.length : 0")
+                if html == last_html and html != "":
+                    return
+                last_html = html
+            except Exception:
+                pass
+            time.sleep(interval)
+
+    def mouse_click(self, x: float, y: float, button: str = "left") -> None:
+        """在指定坐标点击。"""
+        clicked = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.elementFromPoint({x}, {y});
+                if (el) {{
+                    el.dispatchEvent(new MouseEvent('mousedown', {{bubbles: true, clientX: {x}, clientY: {y}, button: 0}}));
+                    el.dispatchEvent(new MouseEvent('mouseup', {{bubbles: true, clientX: {x}, clientY: {y}, button: 0}}));
+                    el.click();
+                    return true;
+                }}
+                return false;
+            }})()
+            """
+        )
+        if not clicked:
+            raise CDPError(f"坐标点击失败: ({x}, {y})")
+
+    def set_file_input(self, selector: str, files: list[str]) -> None:
+        """设置文件输入框的文件（通过 JS 模拟）。"""
+        success = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el || el.tagName !== 'INPUT' || el.type !== 'file') return false;
+                const dt = new DataTransfer();
+                {''.join(f"dt.items.add(new File([], {json.dumps(Path(p).name)}, {{type: 'application/octet-stream'}}));" for p in files)}
+                el.files = dt.files;
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()
+            """
+        )
+        if not success:
+            raise ElementNotFoundError(selector)
+
+    def get_elements_count(self, selector: str) -> int:
+        """获取匹配元素数量。"""
+        result = self.evaluate(f"document.querySelectorAll({json.dumps(selector)}).length")
+        return result if isinstance(result, int) else 0
+
+    def input_text(self, selector: str, text: str) -> None:
+        """向指定选择器的元素输入文本。"""
+        found = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return false;
+                el.focus();
+                el.value = {json.dumps(text)};
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()
+            """
+        )
+        if not found:
+            raise ElementNotFoundError(selector)
+
+    def input_content_editable(self, selector: str, text: str) -> None:
+        """向 contentEditable 元素输入文本。"""
+        success = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el || !el.isContentEditable) return false;
+                el.focus();
+                el.innerText = {json.dumps(text)};
+                el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                return true;
+            }})()
+            """
+        )
+        if not success:
+            raise ElementNotFoundError(selector)
+
+    def remove_element(self, selector: str) -> None:
+        """移除 DOM 元素。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (el) el.remove();
+            }})()
+            """
+        )
+
+    def select_all_text(self, selector: str) -> None:
+        """选中输入框内所有文本。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return;
+                el.focus();
+                el.select ? el.select() : document.execCommand('selectAll');
+            }})()
+            """
+        )
+
+    def scroll_by(self, x: int, y: int) -> None:
+        """滚动页面。"""
+        self.evaluate(f"window.scrollBy({x}, {y})")
+
+    def scroll_to_bottom(self) -> None:
+        """滚动到页面底部。"""
+        self.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+    def capture_screenshot(self, output_path: str) -> str:
+        """保存当前页面截图。"""
+        if not self._adapter.take_screenshot(output_path):
+            raise CDPError("页面截图失败")
+        return output_path
+
 
 class Browser:
     """Chrome 浏览器 CDP 控制器。"""
