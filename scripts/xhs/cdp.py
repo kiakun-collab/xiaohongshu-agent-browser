@@ -784,6 +784,123 @@ class AgentBrowserPage:
             raise CDPError("页面截图失败")
         return output_path
 
+    def evaluate_function(self, function_body: str, *args: Any) -> Any:
+        """执行 JavaScript 函数并返回结果。"""
+        return self.evaluate(f"({function_body})()")
+
+    def query_selector(self, selector: str) -> str | None:
+        """查找单个元素，返回轻量句柄或 None。"""
+        result = self.evaluate(
+            f"document.querySelector({json.dumps(selector)})"
+        )
+        if result is None:
+            return None
+        return f"jsref:{selector}"
+
+    def query_selector_all(self, selector: str) -> list[str]:
+        """查找多个元素，返回轻量句柄列表。"""
+        count = self.evaluate(f"document.querySelectorAll({json.dumps(selector)}).length")
+        if not count:
+            return []
+        return [f"jsref:{selector}[{i}]" for i in range(int(count))]
+
+    def scroll_to(self, x: int, y: int) -> None:
+        """滚动到指定位置。"""
+        self.evaluate(f"window.scrollTo({x}, {y})")
+
+    def scroll_element_into_view(self, selector: str) -> None:
+        """将元素滚动到可视区域。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (el) el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+            }})()
+            """
+        )
+
+    def scroll_nth_element_into_view(self, selector: str, index: int) -> None:
+        """将第 N 个匹配元素滚动到可视区域。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                const els = document.querySelectorAll({json.dumps(selector)});
+                if (els[{index}]) els[{index}].scrollIntoView(
+                    {{behavior: 'smooth', block: 'center'}}
+                );
+            }})()
+            """
+        )
+
+    def get_scroll_top(self) -> int:
+        """获取当前滚动位置。"""
+        result = self.evaluate(
+            "window.pageYOffset || document.documentElement.scrollTop"
+            " || document.body.scrollTop || 0"
+        )
+        return int(result) if result else 0
+
+    def get_viewport_height(self) -> int:
+        """获取视口高度。"""
+        result = self.evaluate("window.innerHeight")
+        return int(result) if result else 768
+
+    def dispatch_wheel_event(self, delta_y: float) -> None:
+        """触发滚轮事件以激活懒加载。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                let target = document.querySelector('.note-scroller')
+                    || document.querySelector('.interaction-container')
+                    || document.documentElement;
+                const event = new WheelEvent('wheel', {{
+                    deltaY: {delta_y},
+                    deltaMode: 0,
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                }});
+                target.dispatchEvent(event);
+            }})()
+            """
+        )
+
+    def mouse_move(self, x: float, y: float) -> None:
+        """移动鼠标。"""
+        self.evaluate(
+            f"""
+            (() => {{
+                const el = document.elementFromPoint({x}, {y});
+                if (el) {{
+                    el.dispatchEvent(new MouseEvent('mousemove', {{
+                        bubbles: true,
+                        clientX: {x},
+                        clientY: {y}
+                    }}));
+                }}
+            }})()
+            """
+        )
+
+    def hover_element(self, selector: str) -> None:
+        """悬停到元素中心。"""
+        box = self.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return null;
+                const rect = el.getBoundingClientRect();
+                return {{x: rect.left + rect.width / 2, y: rect.top + rect.height / 2}};
+            }})()
+            """
+        )
+        if box:
+            self.mouse_move(box["x"], box["y"])
+
+    def inject_stealth(self) -> None:
+        """注入反检测脚本（在 agent-browser 模式下为 no-op）。"""
+        pass
+
 
 class Browser:
     """Chrome 浏览器 CDP 控制器。"""
