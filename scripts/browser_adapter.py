@@ -95,6 +95,10 @@ class AgentBrowserAdapter:
         result = self._run_command("press", key)
         return bool(result["success"])
 
+    def upload_file(self, selector: str, file_path: str) -> bool:
+        result = self._run_command("upload", selector, file_path)
+        return bool(result["success"])
+
     def take_screenshot(self, path: str) -> bool:
         result = self._run_command("screenshot", path)
         return bool(result["success"])

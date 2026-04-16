@@ -541,6 +541,7 @@ class AgentBrowserPage:
 
     def __init__(self, adapter: Any) -> None:
         self._adapter = adapter
+        self.target_id = "agent-browser-page"
 
     def navigate(self, url: str) -> None:
         """导航到指定 URL。"""
@@ -688,7 +689,14 @@ class AgentBrowserPage:
             raise CDPError(f"坐标点击失败: ({x}, {y})")
 
     def set_file_input(self, selector: str, files: list[str]) -> None:
-        """设置文件输入框的文件（通过 JS 模拟）。"""
+        """设置文件输入框的文件。"""
+        # 优先使用 agent-browser 原生 upload 命令（支持真实文件上传）
+        if hasattr(self._adapter, "upload_file"):
+            for p in files:
+                if not self._adapter.upload_file(selector, p):
+                    raise CDPError(f"上传文件失败: {p}")
+            return
+        # 回退到 JS 模拟（仅适用于不需要真实上传的场景）
         success = self.evaluate(
             f"""
             (() => {{

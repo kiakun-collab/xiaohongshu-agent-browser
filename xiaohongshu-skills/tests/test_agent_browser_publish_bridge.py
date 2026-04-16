@@ -143,8 +143,18 @@ class AgentBrowserPublishBridgeTest(unittest.TestCase):
         self.assertEqual(result, "/tmp/shot.png")
         adapter.take_screenshot.assert_called_once_with("/tmp/shot.png")
 
-    def test_set_file_input_dispatches_change_event(self) -> None:
+    def test_set_file_input_uses_native_upload_when_available(self) -> None:
         adapter = mock.Mock(spec=AgentBrowserAdapter)
+        adapter.upload_file.return_value = True
+        page = AgentBrowserPage(adapter)
+
+        page.set_file_input("#file", ["/tmp/1.png"])
+
+        adapter.upload_file.assert_called_once_with("#file", "/tmp/1.png")
+
+    def test_set_file_input_falls_back_to_js_simulation(self) -> None:
+        adapter = mock.Mock(spec=AgentBrowserAdapter)
+        del adapter.upload_file
         adapter.evaluate.return_value = True
         page = AgentBrowserPage(adapter)
 
