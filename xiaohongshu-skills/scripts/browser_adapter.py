@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -79,7 +80,7 @@ class AgentBrowserAdapter:
         return bool(result["success"])
 
     def evaluate(self, expression: str) -> Any:
-        result = self._run_command("evaluate", expression)
+        result = self._run_command("eval", expression)
         if not result["success"]:
             raise RuntimeError(f"Evaluate failed: {result['error']}")
         output = result["output"]
@@ -112,6 +113,8 @@ class AgentBrowserAdapter:
                 command,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
         except FileNotFoundError as exc:
@@ -119,13 +122,16 @@ class AgentBrowserAdapter:
                 f"未找到 agent-browser，可通过 XHS_AGENT_BROWSER_BIN 指定路径: {self.agent_browser_path}"
             ) from exc
 
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+
         if result.returncode != 0:
-            logger.debug("agent-browser command failed: %s", result.stderr.strip())
+            logger.debug("agent-browser command failed: %s", stderr)
 
         return {
             "success": result.returncode == 0,
-            "output": result.stdout.strip(),
-            "error": result.stderr.strip(),
+            "output": stdout,
+            "error": stderr,
             "command": command,
         }
 
@@ -149,6 +155,16 @@ class AgentBrowserAdapter:
             return env_path
         resolved = shutil.which("agent-browser")
         if resolved:
+            # Windows: npm 安装的 .cmd/.bat/.ps1 包装脚本在传递含 & 的参数时
+            # 会被 cmd 误解析，优先使用同目录下的原生 .exe
+            lower = resolved.lower()
+            if sys.platform == "win32" and lower.endswith((".cmd", ".bat", ".ps1")):
+                base = os.path.dirname(resolved)
+                exe_candidate = os.path.join(
+                    base, "node_modules", "agent-browser", "bin", "agent-browser-win32-x64.exe"
+                )
+                if os.path.isfile(exe_candidate):
+                    return exe_candidate
             return resolved
         return DEFAULT_AGENT_BROWSER_PATH
 
