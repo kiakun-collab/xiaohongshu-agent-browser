@@ -19,6 +19,7 @@ import websockets.sync.client as ws_client
 
 from .errors import CDPError, ElementNotFoundError
 from .stealth import REALISTIC_UA, STEALTH_JS
+from chrome_launcher import get_browser_backend, get_agent_browser_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -535,6 +536,121 @@ class Page:
         return str(path)
 
 
+class AgentBrowserPage:
+    """agent-browser 后端支持的页面对象（最小兼容层）。"""
+
+    def __init__(self, adapter: Any) -> None:
+        self._adapter = adapter
+
+    def navigate(self, url: str) -> None:
+        """导航到指定 URL。"""
+        logger.info("导航到: %s", url)
+        if not self._adapter.open_url(url):
+            raise CDPError(f"导航失败: {url}")
+
+    def wait_for_load(self, timeout: float = 60.0) -> None:
+        """等待页面加载完成。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                state = self._adapter.evaluate("document.readyState")
+                if state == "complete":
+                    return
+            except Exception:
+                pass
+            time.sleep(0.5)
+        logger.warning("等待页面加载超时")
+
+    def has_element(self, selector: str) -> bool:
+        """检查元素是否存在。"""
+        try:
+            return (
+                self._adapter.evaluate(
+                    f"document.querySelector({json.dumps(selector)}) !== null"
+                )
+                is True
+            )
+        except Exception:
+            return False
+
+    def wait_for_element(self, selector: str, timeout: float = 30.0) -> str:
+        """等待元素出现，返回 selector 作为轻量句柄。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.has_element(selector):
+                return selector
+            time.sleep(0.5)
+        raise ElementNotFoundError(selector)
+
+    def click_element(self, selector: str) -> None:
+        """点击指定选择器的元素。"""
+        clicked = self._adapter.evaluate(
+            f"""
+            (() => {{
+                const el = document.querySelector({json.dumps(selector)});
+                if (!el) return null;
+                el.scrollIntoView({{block: 'center'}});
+                el.click();
+                return true;
+            }})()
+            """
+        )
+        if not clicked:
+            raise ElementNotFoundError(selector)
+
+    def type_text(self, text: str, delay_ms: int = 50) -> None:
+        """向当前聚焦元素逐字符输入文本。"""
+        for char in text:
+            success = self._adapter.evaluate(
+                f"""
+                (() => {{
+                    const el = document.activeElement;
+                    if (!el) return false;
+                    el.value = (el.value || '') + {json.dumps(char)};
+                    el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                    return true;
+                }})()
+                """
+            )
+            if not success:
+                raise CDPError("没有聚焦的元素可输入")
+            if delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
+
+    def get_element_text(self, selector: str) -> str | None:
+        """获取元素文本内容。"""
+        try:
+            return self._adapter.evaluate(
+                f"""
+                (() => {{
+                    const el = document.querySelector({json.dumps(selector)});
+                    return el ? el.textContent : null;
+                }})()
+                """
+            )
+        except Exception:
+            return None
+
+    def get_element_attribute(self, selector: str, attr: str) -> str | None:
+        """获取元素属性值。"""
+        try:
+            return self._adapter.evaluate(
+                f"""
+                (() => {{
+                    const el = document.querySelector({json.dumps(selector)});
+                    return el ? el.getAttribute({json.dumps(attr)}) : null;
+                }})()
+                """
+            )
+        except Exception:
+            return None
+
+    def press_key(self, key: str) -> None:
+        """按下并释放指定键。"""
+        if not self._adapter.press_key(key):
+            raise CDPError(f"按键失败: {key}")
+
+
 class Browser:
     """Chrome 浏览器 CDP 控制器。"""
 
@@ -543,9 +659,14 @@ class Browser:
         self.port = port
         self.base_url = f"http://{host}:{port}"
         self._cdp: CDPClient | None = None
+        self._agent_adapter: Any | None = None
 
     def connect(self) -> None:
         """连接到 Chrome DevTools。"""
+        if get_browser_backend() == "agent-browser":
+            self._agent_adapter = get_agent_browser_adapter()
+            self._agent_adapter.ensure_ready()
+            return
         resp = requests.get(f"{self.base_url}/json/version", timeout=5)
         resp.raise_for_status()
         info = resp.json()
@@ -553,8 +674,11 @@ class Browser:
         logger.info("连接到 Chrome: %s", ws_url)
         self._cdp = CDPClient(ws_url)
 
-    def new_page(self, url: str = "about:blank") -> Page:
+    def new_page(self, url: str = "about:blank") -> Page | AgentBrowserPage:
         """创建新页面。"""
+        if self._agent_adapter:
+            self._agent_adapter.open_url(url)
+            return AgentBrowserPage(self._agent_adapter)
         if not self._cdp:
             self.connect()
         assert self._cdp is not None
@@ -629,8 +753,12 @@ class Browser:
         session_id = result["sessionId"]
         return self._configure_page(Page(self._cdp, target_id, session_id), emulate=False)
 
-    def get_existing_page(self, target_id: str | None = None) -> Page | None:
+    def get_existing_page(self, target_id: str | None = None) -> Page | AgentBrowserPage | None:
         """获取已有页面。"""
+        if self._agent_adapter:
+            if self._agent_adapter.get_current_url():
+                return AgentBrowserPage(self._agent_adapter)
+            return None
         if target_id:
             return self.attach_to_target(target_id)
 
@@ -649,6 +777,9 @@ class Browser:
 
     def close(self) -> None:
         """关闭连接。"""
+        if self._agent_adapter:
+            self._agent_adapter = None
+            return
         if self._cdp:
             self._cdp.close()
             self._cdp = None

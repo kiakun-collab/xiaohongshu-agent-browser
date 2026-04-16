@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -75,6 +76,22 @@ class AgentBrowserAdapter:
 
     def fill_element(self, ref: str, text: str) -> bool:
         result = self._run_command("fill", self._normalize_ref(ref), text)
+        return bool(result["success"])
+
+    def evaluate(self, expression: str) -> Any:
+        result = self._run_command("evaluate", expression)
+        if not result["success"]:
+            raise RuntimeError(f"Evaluate failed: {result['error']}")
+        output = result["output"]
+        if output == "":
+            return None
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return output
+
+    def press_key(self, key: str) -> bool:
+        result = self._run_command("press", key)
         return bool(result["success"])
 
     def take_screenshot(self, path: str) -> bool:
